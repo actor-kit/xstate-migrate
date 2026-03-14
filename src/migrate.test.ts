@@ -467,6 +467,196 @@ describe('XState Migration', () => {
   });
 });
 
+describe('Mutation testing survivors', () => {
+  test('should handle null values in state object gracefully', () => {
+    const machine = createMachine({
+      id: 'test',
+      initial: 'idle',
+      states: { idle: {}, active: {} },
+    });
+
+    // Persisted snapshot with a state value that is an object containing null
+    const persistedSnapshot = {
+      context: {},
+      value: { idle: null },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    // Should not throw — the null guard matters
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+    expect(migrations).toBeDefined();
+  });
+
+  test('should detect invalid nested states within object state values', () => {
+    const machine = createMachine({
+      id: 'nested',
+      initial: 'parent',
+      states: {
+        parent: {
+          initial: 'child1',
+          states: {
+            child1: {},
+            child2: {},
+          },
+        },
+      },
+    });
+
+    // Persisted with an invalid child state
+    const persistedSnapshot = {
+      context: {},
+      value: { parent: 'removedChild' },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+
+    expect(migrations).toContainEqual({
+      op: 'replace',
+      path: '/value/parent',
+      value: 'child1',
+    });
+  });
+
+  test('should handle machine IDs with dots correctly in state validation', () => {
+    const machine = createMachine({
+      id: 'my.app',
+      initial: 'idle',
+      states: {
+        idle: {},
+        active: {},
+      },
+    });
+
+    // Persisted in a removed state — the dot in ID must be replaced with /
+    const persistedSnapshot = {
+      context: {},
+      value: 'removed',
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+
+    expect(migrations).toContainEqual({
+      op: 'replace',
+      path: '/value',
+      value: 'idle',
+    });
+
+    // Also ensure a valid state with dotted ID produces no migrations
+    const validSnapshot = {
+      context: {},
+      value: 'idle',
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const validMigrations = xstateMigrate.generateMigrations(machine, validSnapshot);
+    expect(validMigrations).toEqual([]);
+  });
+
+  test('should replace invalid nested string state via the typeof string branch', () => {
+    // Tests the branch at line 54: typeof stateValue[key] === 'string' && !validStates.has(...)
+    const machine = createMachine({
+      id: 'app',
+      initial: 'main',
+      states: {
+        main: {
+          initial: 'step1',
+          states: {
+            step1: {},
+            step2: {},
+          },
+        },
+      },
+    });
+
+    // Persisted with valid parent but invalid child string state
+    const persistedSnapshot = {
+      context: {},
+      value: { main: 'deletedStep' },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+
+    // Must generate exactly one replace for the invalid nested state
+    expect(migrations).toEqual([
+      {
+        op: 'replace',
+        path: '/value/main',
+        value: 'step1',
+      },
+    ]);
+
+    // Now test with a VALID nested state — should NOT replace
+    const validSnapshot = {
+      context: {},
+      value: { main: 'step2' },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const validMigrations = xstateMigrate.generateMigrations(machine, validSnapshot);
+    expect(validMigrations).toEqual([]);
+  });
+
+  test('should detect invalid string child in nested object state value', () => {
+    // Directly targets the condition: typeof stateValue[key] === 'string' && !validStates.has(...)
+    // When mutated to `false`, this test must fail because no replace operation would be generated
+    const machine = createMachine({
+      id: 'root',
+      type: 'parallel',
+      states: {
+        regionA: {
+          initial: 'a1',
+          states: { a1: {}, a2: {} },
+        },
+        regionB: {
+          initial: 'b1',
+          states: { b1: {}, b2: {} },
+        },
+      },
+    });
+
+    // regionA has invalid state, regionB is valid
+    const persistedSnapshot = {
+      context: {},
+      value: { regionA: 'removed', regionB: 'b1' },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+
+    // Must replace regionA but NOT regionB
+    expect(migrations).toHaveLength(1);
+    expect(migrations[0]).toEqual({
+      op: 'replace',
+      path: '/value/regionA',
+      value: 'a1',
+    });
+  });
+
+  test('should only enter string branch when stateValue is actually a string', () => {
+    // Exercises the typeof stateValue === 'string' guard at line 67
+    const machine = createMachine({
+      id: 'test',
+      initial: 'idle',
+      context: { x: 1 },
+      states: { idle: {}, active: {} },
+    });
+
+    // Pass a numeric value (not string, not object) to exercise the else-if guard
+    const weirdSnapshot = {
+      context: { x: 1 },
+      value: 42 as any,
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    // With the guard, a non-string non-object value should produce no value operations
+    const migrations = xstateMigrate.generateMigrations(machine, weirdSnapshot);
+    expect(migrations.filter((op) => op.path.startsWith('/value'))).toEqual([]);
+  });
+});
+
 describe('XState Migration with typed input and runtime dependency', () => {
   interface RuntimeDependency {
     getSnapshot: () => { value: number };
