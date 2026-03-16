@@ -635,6 +635,89 @@ describe('Mutation testing survivors', () => {
     });
   });
 
+  test('should not replace valid states when machine ID contains dots (parallel regions)', () => {
+    // TLA+ model found this: the object branch (line 55) does NOT replace dots
+    // in machine.id, but validStates (line 12) DOES replace dots.
+    // So for machine id "my.app" with nested state {auth: "idle"},
+    // the object branch looks up "my.app/auth/idle" but validStates has "my/app/auth/idle".
+    // This causes valid states to be incorrectly replaced.
+    const machine = createMachine({
+      id: 'my.app',
+      type: 'parallel',
+      states: {
+        auth: {
+          initial: 'idle',
+          states: { idle: {}, active: {} },
+        },
+        nav: {
+          initial: 'home',
+          states: { home: {}, settings: {} },
+        },
+      },
+    });
+
+    // Both regions are in valid states — no migrations should be needed
+    const persistedSnapshot = {
+      context: {},
+      value: { auth: 'idle', nav: 'home' },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+
+    // BUG: This currently generates replace operations because the object branch
+    // constructs "my.app/auth/idle" instead of "my/app/auth/idle"
+    expect(migrations).toEqual([]);
+  });
+
+  test('should not replace valid states when machine ID contains dots (deeply nested)', () => {
+    // Verify the dot-replacement fix works at multiple nesting levels
+    const machine = createMachine({
+      id: 'my.app',
+      initial: 'parent',
+      states: {
+        parent: {
+          initial: 'child',
+          states: {
+            child: {
+              initial: 'grandchild',
+              states: {
+                grandchild: {},
+                otherGrandchild: {},
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // All states are valid — no migrations expected
+    const persistedSnapshot = {
+      context: {},
+      value: { parent: { child: 'grandchild' } },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
+    expect(migrations).toEqual([]);
+
+    // Also test with an INVALID deeply nested state
+    const invalidSnapshot = {
+      context: {},
+      value: { parent: { child: 'removed' } },
+      status: 'active',
+    } as unknown as AnyMachineSnapshot;
+
+    const invalidMigrations = xstateMigrate.generateMigrations(machine, invalidSnapshot);
+    expect(invalidMigrations).toEqual([
+      {
+        op: 'replace',
+        path: '/value/parent/child',
+        value: 'grandchild',
+      },
+    ]);
+  });
+
   test('should only enter string branch when stateValue is actually a string', () => {
     // Exercises the typeof stateValue === 'string' guard at line 67
     const machine = createMachine({
