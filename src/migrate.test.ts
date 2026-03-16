@@ -656,17 +656,11 @@ describe('Mutation testing survivors', () => {
       },
     });
 
-    // Both regions are in valid states — no migrations should be needed
-    const persistedSnapshot = {
-      context: {},
-      value: { auth: 'idle', nav: 'home' },
-      status: 'active',
-    } as unknown as AnyMachineSnapshot;
+    // Both regions are in valid initial states — no migrations should be needed
+    const actor = createActor(machine).start();
+    const persistedSnapshot = actor.getSnapshot();
 
     const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
-
-    // BUG: This currently generates replace operations because the object branch
-    // constructs "my.app/auth/idle" instead of "my/app/auth/idle"
     expect(migrations).toEqual([]);
   });
 
@@ -691,12 +685,9 @@ describe('Mutation testing survivors', () => {
       },
     });
 
-    // All states are valid — no migrations expected
-    const persistedSnapshot = {
-      context: {},
-      value: { parent: { child: 'grandchild' } },
-      status: 'active',
-    } as unknown as AnyMachineSnapshot;
+    // All states are valid initial states — no migrations expected
+    const actor = createActor(machine).start();
+    const persistedSnapshot = actor.getSnapshot();
 
     const migrations = xstateMigrate.generateMigrations(machine, persistedSnapshot);
     expect(migrations).toEqual([]);
