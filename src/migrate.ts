@@ -52,7 +52,7 @@ export const xstateMigrate: XStateMigrate = {
           const newInitialPath = [...initialPath, key];
           if (
             typeof stateValue[key] === 'string' &&
-            !validStates.has(`${machine.id}${newPath}/${stateValue[key]}`)
+            !validStates.has(`${machine.id}${newPath}/${stateValue[key]}`.replace(/\./g, '/'))
           ) {
             const initialStateValue = getInitialStateValue(initialSnap.value, newInitialPath);
             valueOperations.push({
